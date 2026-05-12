@@ -113,13 +113,19 @@ else:
                     
                     st.session_state["history"].append(new_record)
                     
+                    # --- 顯示結果 (邏輯加強版) ---
                     status = str(new_record["檢核狀態"])
-                    if "達標" in status or "Passed" in status:
+                    reason = str(new_record["AI 審核原因"])
+                    
+                    # 只有同時滿足「有達標關鍵字」且「沒有未達標關鍵字」才顯示成功
+                    is_passed = ("達標" in status or "Passed" in status) and ("未達標" not in status and "Failed" not in status)
+                    
+                    if is_passed:
                         st.success(f"✅ 檢核通過：{status}")
                     else:
                         st.error(f"❌ 檢核失敗：{status}")
                     
-                    st.write(f"**🕵️ AI 專家分析：** {new_record['AI 審核原因']}")
+                    st.write(f"**🕵️ AI 專家分析：** {reason}")
                     st.write("---")
                     
                 except Exception as e:
