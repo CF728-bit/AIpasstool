@@ -74,7 +74,7 @@ else:
         image = Image.open(uploaded_file)
         st.image(image, caption="待檢核之原始證照", width=500)
         
-        if st.button("🚀 啟動專業對口自動化檢核"):
+        if st.button("檢核"):
             with st.spinner(f"AI 正在比對是否符合 {st.session_state['user_dept']} 專業門檻..."):
                 prompt = f"""
                 你是一個「南亞技術學院」的畢業資格審核員。
