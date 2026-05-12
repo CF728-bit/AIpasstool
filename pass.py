@@ -46,14 +46,17 @@ if not st.session_state["login"]:
 else:
     # 已登入介面
     st.sidebar.title("南亞校務管理")
-    st.sidebar.write(f"目前登入者：{st.session_state['user_id']}")
-    st.sidebar.write(f"所屬系所：{st.session_state['user_dept']}")
-    if st.sidebar.button("登出系統"):
+    st.sidebar.markdown(f"### 👤 {st.session_state['user_name']}") # 加大顯示姓名
+    st.sidebar.write(f"**學號：** {st.session_state['user_id']}")
+    st.sidebar.write(f"**系所：** {st.session_state['user_dept']}")
+    st.sidebar.divider() # 加一條分割線比較美觀
+    
+    if st.sidebar.button("登出系統", use_container_width=True): # 讓按鈕寬度適配側邊欄
         st.session_state["login"] = False
         st.rerun()
 
     st.title("🔍 全校各系專業證照 AI 辨識與檢核")
-    st.markdown(f"**當前審核模式：【{st.session_state['user_dept']}】畢業門檻比對**")
+    st.info(f"當前系統將以「{st.session_state['user_dept']}」畢業門檻進行審核")
     
     uploaded_file = st.file_uploader("請上傳您的專業證照照片 (JPG/PNG)", type=["jpg", "jpeg", "png"])
 
