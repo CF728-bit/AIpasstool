@@ -103,11 +103,12 @@ else:
                     
                     st.session_state["history"].append(new_record)
                     
-                    # 顯示結果
-                    if "Passed" in new_record["檢核狀態"]:
-                        st.success(f"✅ 判定為 {new_record['判定系所']}：{new_record['檢核狀態']}")
+                    # 顯示結果 (優化顯示邏輯)
+                    status = str(new_record["檢核狀態"]) # 轉為字串避免出錯
+                    if "達標" in status or "Passed" in status:
+                        st.success(f"✅ 判定為 {new_record['判定系所']}：{status}")
                     else:
-                        st.error(f"❌ 檢核結果：{new_record['檢核狀態']}")
+                        st.error(f"❌ 檢核結果：{status}")
                     
                     st.write(f"**🕵️ AI 專家分析：** {new_record['AI 審核原因']}")
                     st.write("---")
