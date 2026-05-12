@@ -9,10 +9,10 @@ import io
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
+    # 這裡不要放任何真實的金鑰，避免再次被封鎖
     st.error("請在 Streamlit Cloud Secrets 中設定 API Key")
 
-# 這裡建議使用穩定版 flash 模型
-model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
 
 st.set_page_config(page_title="南亞技術學院 - 專業畢業門檻自動檢核系統", layout="wide")
 
@@ -22,12 +22,12 @@ if "login" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state["history"] = []
 
-# 使用者名單
+# 使用者名單 (包含不同科系的測試帳號)
 USER_DB = {
     "admin": "1234",
-    "1111227144": "1234",
-    "nanya_cook": "1234",
-    "nanya_design": "1234"
+    "1111227144": "1234", # 資工系測試
+    "nanya_cook": "1234", # 餐飲系測試
+    "nanya_design": "1234" # 設計系測試
 }
 
 # --- 介面邏輯 ---
@@ -54,41 +54,51 @@ else:
     st.title("🔍 全校各系專業證照 AI 辨識與檢核")
     st.markdown("""
     **本系統已擴充支援南亞技術學院各系門檻：**
-    *   **資工系、餐飲系、設計系、企管系**
+    *   **資工系：** 程式設計、網管相關證照
+    *   **餐飲系：** 廚藝丙/乙級、烘焙、食品安全證照
+    *   **設計系：** 室內設計、電腦繪圖(ACA/TQC)相關證照
+    *   **企管系：** 專案管理、門市服務、會計相關證照
     """)
-
+    
+    # 上傳功能
     uploaded_file = st.file_uploader("請上傳您的專業證照照片 (JPG/PNG)", type=["jpg", "jpeg", "png"])
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
         st.image(image, caption="待檢核之原始證照", width=500)
-
+        
         if st.button("🚀 啟動全校通用自動化檢核"):
-            with st.spinner("AI 正在根據南亞各系畢業門檻進行比對..."):
+            with st.spinner("AI 正在根據南亞各系畢業門檻進行 Mapping 比對..."):
+                # 擴充後的 Prompt：加入多科系判定邏輯
                 prompt = """
                 你是一個「南亞技術學院」的畢業資格審核員。請分析這張圖片，並嚴格按照格式（姓名,所屬系所,證照名稱,證號,檢核狀態,判定原因）回傳，中間用逗號隔開。
-
-                【全校專業門檻判定標準】：
-                1. 系所判定：根據內容判定屬於 資工、餐飲、設計 或 企管系。
-                2. 印章防偽：必須有清晰印章。
-                3. 達標判定：符合專業領域且具備有效印章，狀態設為「達標 (Passed)」。
-
+                
+                【全校專業門檻判定標準 (放寬印章限制)】：
+                1. **系所判定**：根據證照內容自動判定屬於「資訊工程系」、「餐飲廚藝系」、「室內設計系」或「企業管理系」。
+                2. **印章防偽檢核**：
+                   - 必須有清晰的印章。印章來源可以是「政府機關」、「學校」或「正式登記之專業協會/機構」(如：發行協會、學會、委員會)。
+                   - **特別許可**：若印章為合法的專業團體(如圖中顯示之發展協會)所核發之專業證照，視為有效印章。
+                   - 若完全無印章或印章明顯為數位合成(邊緣異常銳利且無紙張紋理)，才判定為「不合格」。
+                3. **達標判定**：
+                   - 符合該系專業領域（資訊、餐飲、設計、企管）且具備有效印章，狀態設為「達標 (Passed)」。
+                
                 回傳格式範例：
-                陳興翰,資訊工程系,人工智慧乙級能力檢定,雙福三創第1377號,達標 (Passed),具備正式協會印章。
+                陳興翰,資訊工程系,人工智慧乙級能力檢定,雙福三創第1377號,達標 (Passed),具備正式協會印章且符合資工系專業門檻。
                 """
-
-                try:
-                    # 傳送給 AI
+                
+             try:
                     response = model.generate_content([prompt, image])
                     res_text = response.text.strip()
-
-                    # 處理字串切割 (限制切 5 刀，避免原因中的逗號跑位)
+                    
+                    # 1. 修正分割邏輯：只分割前 5 個逗號，剩下的全部留給最後一個欄位 (原因)
+                    # 這樣就算原因裡面有逗號，也不會導致表格跑位
                     result_list = [item.strip() for item in res_text.split(',', 5)]
-
-                    # 補足長度防止出錯
+                    
+                    # 確保長度足夠，避免 AI 回傳格式不全導致閃退
                     while len(result_list) < 6:
                         result_list.append("資料缺失")
 
+                    # 2. 建立紀錄 (移除掉原本 result_list[0] 外面的中括號，讓 CSV 乾淨)
                     new_record = {
                         "檢核時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "姓名": result_list[0],
@@ -98,37 +108,34 @@ else:
                         "檢核狀態": result_list[4],
                         "AI 審核原因": result_list[5]
                     }
-
+                    
                     st.session_state["history"].append(new_record)
-
+                    
                     # 顯示結果
                     status = str(new_record["檢核狀態"])
                     if "達標" in status or "Passed" in status:
-                        st.success(f"✅ 判定結果：{status}")
+                        st.success(f"✅ 判定為 {new_record['判定系所']}：{status}")
                     else:
-                        st.error(f"❌ 判定結果：{status}")
-
+                        st.error(f"❌ 檢核結果：{status}")
+                    
                     st.write(f"**🕵️ AI 專家分析：** {new_record['AI 審核原因']}")
                     st.write("---")
-
+                    
                 except Exception as e:
                     st.error(f"自動化檢核失敗：{e}")
 
-    # --- 顯示歷史紀錄與匯出 ---
+    # --- 顯示歷史紀錄與匯出報表 ---
     if st.session_state["history"]:
         st.divider()
         st.subheader("📋 南亞技術學院 - 學生歷年證照檢核清單")
         df = pd.DataFrame(st.session_state["history"])
         st.dataframe(df, use_container_width=True)
 
-        # 改用更穩定的 Excel 格式匯出，避免 CSV 中文亂碼問題
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='檢核報表')
-
+        # 匯出報表
+        csv = df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
-            label="📥 匯出全校畢業檢核報表 (Excel)",
-            data=buffer.getvalue(),
-            file_name=f"南亞檢核報表_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.ms-excel",
+            label="📥 匯出全校畢業檢核報表 (CSV)",
+            data=csv,
+            file_name=f"南亞畢業檢核_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
         )
