@@ -9,7 +9,6 @@ import io
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    # 這裡不要放任何真實的金鑰，避免再次被封鎖
     st.error("請在 Streamlit Cloud Secrets 中設定 API Key")
 
 model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
@@ -22,12 +21,12 @@ if "login" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state["history"] = []
 
-# 使用者名單 (包含不同科系的測試帳號)
-USER_DB = {
-    "admin": "1234",
-    "1111227144": "1234", # 資工系測試
-    "nanya_cook": "1234", # 餐飲系測試
-    "nanya_design": "1234" # 設計系測試
+# 使用者名單與所屬系所對照
+USER_INFO = {
+    "admin": {"pw": "1234", "dept": "管理員"},
+    "1111227144": {"pw": "1234", "dept": "資訊工程系"},
+    "nanya_cook": {"pw": "1234", "dept": "餐飲廚藝系"},
+    "nanya_design": {"pw": "1234", "dept": "室內設計系"}
 }
 
 # --- 介面邏輯 ---
@@ -37,9 +36,10 @@ if not st.session_state["login"]:
     user_id = st.text_input("學號 / 帳號")
     password = st.text_input("密碼", type="password")
     if st.button("登入系統"):
-        if user_id in USER_DB and USER_DB[user_id] == password:
+        if user_id in USER_INFO and USER_INFO[user_id]["pw"] == password:
             st.session_state["login"] = True
             st.session_state["user_id"] = user_id
+            st.session_state["user_dept"] = USER_INFO[user_id]["dept"]
             st.rerun()
         else:
             st.error("帳號或密碼錯誤")
@@ -47,62 +47,60 @@ else:
     # 已登入介面
     st.sidebar.title("南亞校務管理")
     st.sidebar.write(f"目前登入者：{st.session_state['user_id']}")
+    st.sidebar.write(f"所屬系所：{st.session_state['user_dept']}")
     if st.sidebar.button("登出系統"):
         st.session_state["login"] = False
         st.rerun()
 
     st.title("🔍 全校各系專業證照 AI 辨識與檢核")
-    st.markdown("""
-    **本系統已擴充支援南亞技術學院各系門檻：**
-    *   **資工系：** 程式設計、網管相關證照
-    *   **餐飲系：** 廚藝丙/乙級、烘焙、食品安全證照
-    *   **設計系：** 室內設計、電腦繪圖(ACA/TQC)相關證照
-    *   **企管系：** 專案管理、門市服務、會計相關證照
-    """)
+    st.markdown(f"**當前審核模式：【{st.session_state['user_dept']}】畢業門檻比對**")
     
-    # 上傳功能
     uploaded_file = st.file_uploader("請上傳您的專業證照照片 (JPG/PNG)", type=["jpg", "jpeg", "png"])
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
         st.image(image, caption="待檢核之原始證照", width=500)
         
-        if st.button("🚀 啟動全校通用自動化檢核"):
-            with st.spinner("AI 正在根據南亞各系畢業門檻進行 Mapping 比對..."):
-                # 擴充後的 Prompt：加入多科系判定邏輯
-                prompt = """
-                你是一個「南亞技術學院」的畢業資格審核員。請分析這張圖片，並嚴格按照格式（姓名,所屬系所,證照名稱,證號,檢核狀態,判定原因）回傳，中間用逗號隔開。
+        if st.button("🚀 啟動專業對口自動化檢核"):
+            with st.spinner(f"AI 正在比對是否符合 {st.session_state['user_dept']} 專業門檻..."):
                 
-                【全校專業門檻判定標準 (放寬印章限制)】：
-                1. **系所判定**：根據證照內容自動判定屬於「資訊工程系」、「餐飲廚藝系」、「室內設計系」或「企業管理系」。
-                2. **印章防偽檢核**：
-                   - 必須有清晰的印章。印章來源可以是「政府機關」、「學校」或「正式登記之專業協會/機構」(如：發行協會、學會、委員會)。
-                   - **特別許可**：若印章為合法的專業團體(如圖中顯示之發展協會)所核發之專業證照，視為有效印章。
-                   - 若完全無印章或印章明顯為數位合成(邊緣異常銳利且無紙張紋理)，才判定為「不合格」。
-                3. **達標判定**：
-                   - 符合該系專業領域（資訊、餐飲、設計、企管）且具備有效印章，狀態設為「達標 (Passed)」。
+                # 動態建構 Prompt，根據登入者系所要求 AI 嚴格把關
+                prompt = f"""
+                你是一個「南亞技術學院」的畢業資格審核員。
+                目前的受檢學生所屬系所為：【{st.session_state['user_dept']}】。
+                
+                請分析這張證照圖片，並嚴格按照格式（姓名,判定證照所屬系所,證照名稱,證號,檢核狀態,判定原因）回傳，中間用逗號隔開。
+                
+                【專業對口判定標準】：
+                1. **系所匹配 (最重要)**：
+                   - 如果證照內容「不屬於」【{st.session_state['user_dept']}】的專業領域，檢核狀態必須設為「未達標 (系所不符)」。
+                   - 範例：資工系學生拿「中餐丙級」證照，應判定為「未達標」。
+                2. **專業領域定義**：
+                   - 資訊工程系：程式設計、網路管理、人工智慧、資訊安全、硬體裝修、TQC/MOS等。
+                   - 餐飲廚藝系：中西餐烹調、烘焙、食品安全、調酒、餐飲服務等。
+                   - 室內設計系：建築製圖、CAD繪圖、室內裝修、視覺傳達等。
+                   - 企業管理系：門市服務、會計、專案管理、行銷企劃等。
+                3. **印章檢核**：必須具備正式機構印章。
+                4. **達標狀態**：必須「同時符合」系所專業且「具備有效印章」，才設為「達標 (Passed)」。
                 
                 回傳格式範例：
-                陳興翰,資訊工程系,人工智慧乙級能力檢定,雙福三創第1377號,達標 (Passed),具備正式協會印章且符合資工系專業門檻。
+                陳興翰,資訊工程系,人工智慧乙級能力檢定,雙福三創第1377號,達標 (Passed),證照符合資工系專業領域且印章完整。
                 """
                 
                 try:
                     response = model.generate_content([prompt, image])
                     res_text = response.text.strip()
                     
-                    # 1. 修正分割邏輯：只分割前 5 個逗號，剩下的全部留給最後一個欄位 (原因)
-                    # 這樣就算原因裡面有逗號，也不會導致表格跑位
                     result_list = [item.strip() for item in res_text.split(',', 5)]
                     
-                    # 確保長度足夠，避免 AI 回傳格式不全導致閃退
                     while len(result_list) < 6:
                         result_list.append("資料缺失")
 
-                    # 2. 建立紀錄 (移除掉原本 result_list[0] 外面的中括號，讓 CSV 乾淨)
                     new_record = {
                         "檢核時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "姓名": result_list[0],
-                        "判定系所": result_list[1],
+                        "學生姓名": result_list[0],
+                        "學生系所": st.session_state["user_dept"],
+                        "證照判定系所": result_list[1],
                         "證照名稱": result_list[2],
                         "證號": result_list[3],
                         "檢核狀態": result_list[4],
@@ -114,9 +112,9 @@ else:
                     # 顯示結果
                     status = str(new_record["檢核狀態"])
                     if "達標" in status or "Passed" in status:
-                        st.success(f"✅ 判定為 {new_record['判定系所']}：{status}")
+                        st.success(f"✅ 檢核通過：{status}")
                     else:
-                        st.error(f"❌ 檢核結果：{status}")
+                        st.error(f"❌ 檢核失敗：{status}")
                     
                     st.write(f"**🕵️ AI 專家分析：** {new_record['AI 審核原因']}")
                     st.write("---")
@@ -131,7 +129,6 @@ else:
         df = pd.DataFrame(st.session_state["history"])
         st.dataframe(df, use_container_width=True)
 
-        # 匯出報表
         csv = df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="📥 匯出全校畢業檢核報表 (CSV)",
