@@ -86,7 +86,7 @@ else:
                 陳興翰,資訊工程系,人工智慧乙級能力檢定,雙福三創第1377號,達標 (Passed),具備正式協會印章且符合資工系專業門檻。
                 """
                 
-             try:
+                try:
                     response = model.generate_content([prompt, image])
                     res_text = response.text.strip()
                     
