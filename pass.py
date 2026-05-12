@@ -9,7 +9,8 @@ import io
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    genai.configure(api_key="AIzaSyBdJw5uHOxcAbLjHrBXcI7wrD1nOt8nMeM")
+    # 這裡不要放任何真實的金鑰，避免再次被封鎖
+    st.error("請在 Streamlit Cloud Secrets 中設定 API Key")
 
 model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
 
