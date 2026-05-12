@@ -86,25 +86,33 @@ else:
                 陳興翰,資訊工程系,人工智慧乙級能力檢定,雙福三創第1377號,達標 (Passed),具備正式協會印章且符合資工系專業門檻。
                 """
                 
-                try:
+                  try:
                     response = model.generate_content([prompt, image])
                     res_text = response.text.strip()
-                    result_list = [item.strip() for item in res_text.split(',')]
                     
+                    # 1. 修正分割邏輯：只分割前 5 個逗號，剩下的全部留給最後一個欄位 (原因)
+                    # 這樣就算原因裡面有逗號，也不會導致表格跑位
+                    result_list = [item.strip() for item in res_text.split(',', 5)]
+                    
+                    # 確保長度足夠，避免 AI 回傳格式不全導致閃退
+                    while len(result_list) < 6:
+                        result_list.append("資料缺失")
+
+                    # 2. 建立紀錄 (移除掉原本 result_list[0] 外面的中括號，讓 CSV 乾淨)
                     new_record = {
                         "檢核時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "姓名": result_list if len(result_list) > 0 else "未知",
-                        "判定系所": result_list if len(result_list) > 1 else "其他",
-                        "證照名稱": result_list if len(result_list) > 2 else "未知",
-                        "證號": result_list if len(result_list) > 3 else "未知",
-                        "檢核狀態": result_list if len(result_list) > 4 else "未達標 (Failed)",
-                        "AI 審核原因": result_list if len(result_list) > 5 else "格式異常"
+                        "姓名": result_list[0],
+                        "判定系所": result_list[1],
+                        "證照名稱": result_list[2],
+                        "證號": result_list[3],
+                        "檢核狀態": result_list[4],
+                        "AI 審核原因": result_list[5]
                     }
                     
                     st.session_state["history"].append(new_record)
                     
-                    # 顯示結果 (優化顯示邏輯)
-                    status = str(new_record["檢核狀態"]) # 轉為字串避免出錯
+                    # 顯示結果
+                    status = str(new_record["檢核狀態"])
                     if "達標" in status or "Passed" in status:
                         st.success(f"✅ 判定為 {new_record['判定系所']}：{status}")
                     else:
