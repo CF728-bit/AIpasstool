@@ -4,10 +4,9 @@ from PIL import Image
 import pandas as pd
 from datetime import datetime
 import io
-# --- 關鍵修正 1：引入外部證照資料庫檔案 ---
 from certs_db import APPROVED_CERTIFICATES
 
-# 1. 設定 Gemini API (保留您原本的密鑰邏輯，完全不變動)
+# 1. 設定 Gemini API (保留原密鑰邏輯，不做任何變動)
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
@@ -17,7 +16,7 @@ model = genai.GenerativeModel(model_name="models/gemini-2.5-flash")
 
 st.set_page_config(page_title="南亞技術學院 - 專業畢業門檻自動檢核系統", layout="wide")
 
-# --- 初始化所有需要的 Session State ---
+# 初始化 Session State
 if "login" not in st.session_state:
     st.session_state["login"] = False
 if "user_id" not in st.session_state:
@@ -29,13 +28,37 @@ if "user_dept" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state["history"] = []
 
-# 使用者資料庫 (可依需求自行擴充測試帳號)
+# 使用者資料庫
 USER_INFO = {
     "admin": {"pw": "1234", "dept": "管理員", "name": "系統管理員"},
     "1111227144": {"pw": "1234", "dept": "資訊工程系", "name": "陳興翰"},
     "1111227113": {"pw": "1234", "dept": "資訊工程系", "name": "林佑德"},
     "nanya_design": {"pw": "1234", "dept": "室內設計系", "name": "李大華"}
 }
+
+# --- 💡 點數計算輔助函式 ---
+def calculate_cert_points(level, issuer):
+    """根據證照級數與發證單位，自動計算門檻點數"""
+    lvl = str(level)
+    isr = str(issuer)
+    
+    # 判斷是否為政府機構或國際證照
+    is_gov_or_intl = any(keyword in isr.lower() for keyword in [
+        "勞動部", "考試院", "環保署", "經濟部", "交通部", "教育部", "觀光署", "民航局", "農業部", "客家委員會", "原住民族委員會",
+        "microsoft", "cisco", "autodesk", "adobe", "certiport", "trimble", "linux", "red hat", "sun microsystems", "ec-council", "check point"
+    ])
+    
+    # 1. 甲級 / 進階 判定
+    if "甲" in lvl or "進階" in lvl or "n2" in lvl.lower() or "master" in lvl.lower() or "大師" in lvl:
+        return 12 if is_gov_or_intl else 9
+        
+    # 2. 乙級 / 普考 / 單一級 判定
+    elif "乙" in lvl or "單一" in lvl or "普考" in lvl or "中高級" in lvl or "n3" in lvl.lower():
+        return 8 if is_gov_or_intl else 5
+        
+    # 3. 丙級 / 初級 / 實用級 / 核心能力 判定
+    else:
+        return 4 if is_gov_or_intl else 2
 
 # --- 介面邏輯 ---
 if not st.session_state["login"]:
@@ -61,6 +84,24 @@ else:
     st.sidebar.write(f"**系所：** {st.session_state['user_dept']}")
     st.sidebar.divider()
     
+    # --- 💡 側邊欄動態顯示當前點數與畢業進度 ---
+    valid_records = [r for r in st.session_state["history"] if "✅" in r["檢核狀態"]]
+    total_points = sum(r["所得點數"] for r in valid_records)
+    
+    st.sidebar.subheader("🎯 畢業門檻點數累計")
+    st.sidebar.metric(label="當前總點數", value=f"{total_points} / 12 點")
+    
+    # 進度條顯示 (最高到 100%)
+    progress_val = min(total_points / 12, 1.0)
+    st.sidebar.progress(progress_val)
+    
+    if total_points >= 12:
+        st.sidebar.success("🎉 已達畢業門檻標準！")
+    else:
+        st.sidebar.warning(f"⏳ 尚缺 {12 - total_points} 點達標畢業門檻")
+        
+    st.sidebar.divider()
+    
     if st.sidebar.button("登出系統", use_container_width=True):
         st.session_state["login"] = False
         st.rerun()
@@ -77,11 +118,8 @@ else:
         if st.button("檢核"):
             with st.spinner(f"AI 正在比對是否符合 {st.session_state['user_dept']} 專業門檻..."):
                 
-                # --- 關鍵修正 2：自動提取該登入學生的系所白名單 ---
                 current_dept = st.session_state["user_dept"]
                 dept_certs = APPROVED_CERTIFICATES.get(current_dept, [])
-                
-                # 將結構化的白名單轉換為純文字，塞進 Prompt 供 AI 比對
                 whitelist_text = "\n".join([f"- {c['名稱']} (級數: {c['級數']}, 發證單位: {c['發證單位']})" for c in dept_certs])
                 
                 prompt = f"""
@@ -110,46 +148,58 @@ else:
                     while len(result_list) < 6:
                         result_list.append("資料缺失")
 
-                    # --- 關鍵修正 3：後台進行二次確認，自動在清單中抓取官方對齊的「發證單位」與「級數」 ---
-                    ai_cert_name = result_list[2]
+                    ai_cert_name = result_list
+                    status_text = result_list
+                    
+                    # 預設資料庫對齊欄位
                     matched_level = "依圖片判定"
                     matched_issuer = "依圖片判定"
+                    cert_points = 0
                     
-                    for cert in dept_certs:
-                        if cert["名稱"] in ai_cert_name or ai_cert_name in cert["名稱"]:
-                            matched_level = cert["級數"]
-                            matched_issuer = cert["發證單位"]
-                            break
+                    # 檢查 AI 判定是否成功達標
+                    is_passed = ("達標" in status_text or "Passed" in status_text) and ("未達標" not in status_text and "Failed" not in status_text)
+                    
+                    # 如果通過，從 Python 資料庫查找詳細級數與單位以精準計算點數
+                    if is_passed:
+                        for cert in dept_certs:
+                            if cert["名稱"] in ai_cert_name or ai_cert_name in cert["名稱"]:
+                                matched_level = cert["級數"]
+                                matched_issuer = cert["發證單位"]
+                                break
+                        # 計算點數
+                        cert_points = calculate_cert_points(matched_level, matched_issuer)
+                        final_status = "✅ 檢核通過"
+                    else:
+                        final_status = f"❌ 檢核失敗 ({status_text})"
 
                     new_record = {
                         "檢核時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "學生姓名": st.session_state["user_name"],
                         "就讀系所": st.session_state["user_dept"],
-                        "證照顯示姓名": result_list[0],
+                        "證照顯示姓名": result_list,
                         "證照核定名稱": ai_cert_name,
                         "官方審定級數": matched_level,
                         "官方發證單位": matched_issuer,
-                        "證照編號": result_list[3],
-                        "檢核狀態": result_list[4],
-                        "AI 審核原因": result_list[5]
+                        "所得點數": cert_points,
+                        "證照編號": result_list,
+                        "檢核狀態": final_status,
+                        "AI 審核原因": result_list
                     }
                     
                     st.session_state["history"].append(new_record)
                     
-                    # --- 顯示結果 (邏輯加強版) ---
-                    status = str(new_record["檢核狀態"])
-                    reason = str(new_record["AI 審核原因"])
-                    
-                    is_passed = ("達標" in status or "Passed" in status) and ("未達標" not in status and "Failed" not in status)
-                    
+                    # 畫面即時反饋
                     if is_passed:
-                        st.success(f"✅ 檢核通過：{status}")
+                        st.success(f"✅ 檢核通過！本張證照核定點數：{cert_points} 點。")
                     else:
-                        st.error(f"❌ 檢核失敗：{status}")
+                        st.error(f"❌ 檢核未通過：{status_text}")
                     
-                    st.write(f"**🕵️ AI 專家分析：** {reason}")
-                    st.write(f"**📋 系統對齊資料：** 官方發證單位：`{matched_issuer}` | 核定級數：`{matched_level}`")
+                    st.write(f"**🕵️ AI 專家分析：** {new_record['AI 審核原因']}")
+                    st.write(f"**📋 系統對齊資料：** 發證單位：`{matched_issuer}` | 核定級數：`{matched_level}` | 核發點數：`{cert_points}` 點")
                     st.write("---")
+                    
+                    # 強制刷新頁面，讓側邊欄的點數計數器即時更新
+                    st.rerun()
                     
                 except Exception as e:
                     st.error(f"自動化檢核失敗：{e}")
@@ -157,9 +207,9 @@ else:
     # --- 顯示歷史紀錄 ---
     if st.session_state["history"]:
         st.divider()
-        st.subheader("📋 證照檢核清單")
+        st.subheader("📋 證照檢核清單與累計報表")
         df = pd.DataFrame(st.session_state["history"])
         st.dataframe(df, use_container_width=True)
 
         csv = df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(label="📥 匯出報表", data=csv, file_name=f"畢業檢核_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+        st.download_button(label="📥 匯出個人畢業檢核報表", data=csv, file_name=f"南亞畢業檢核_{st.session_state['user_id']}_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
