@@ -6,7 +6,7 @@ from datetime import datetime
 import io
 from certs_db import APPROVED_CERTIFICATES
 
-# 1. 設定 Gemini API (保留原密鑰邏輯，不做任何變動)
+# 1. 設定 Gemini API
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
@@ -36,27 +36,20 @@ USER_INFO = {
     "nanya_design": {"pw": "1234", "dept": "室內設計系", "name": "李大華"}
 }
 
-# --- 💡 點數計算輔助函式 ---
+# 點數計算輔助函式
 def calculate_cert_points(level, issuer):
-    """根據證照級數與發證單位，自動計算門檻點數"""
     lvl = str(level)
     isr = str(issuer)
     
-    # 判斷是否為政府機構或國際證照
     is_gov_or_intl = any(keyword in isr.lower() for keyword in [
         "勞動部", "考試院", "環保署", "經濟部", "交通部", "教育部", "觀光署", "民航局", "農業部", "客家委員會", "原住民族委員會",
         "microsoft", "cisco", "autodesk", "adobe", "certiport", "trimble", "linux", "red hat", "sun microsystems", "ec-council", "check point"
     ])
     
-    # 1. 甲級 / 進階 判定
     if "甲" in lvl or "進階" in lvl or "n2" in lvl.lower() or "master" in lvl.lower() or "大師" in lvl:
         return 12 if is_gov_or_intl else 9
-        
-    # 2. 乙級 / 普考 / 單一級 判定
     elif "乙" in lvl or "單一" in lvl or "普考" in lvl or "中高級" in lvl or "n3" in lvl.lower():
         return 8 if is_gov_or_intl else 5
-        
-    # 3. 丙級 / 初級 / 實用級 / 核心能力 判定
     else:
         return 4 if is_gov_or_intl else 2
 
@@ -77,21 +70,20 @@ if not st.session_state["login"]:
         else:
             st.error("帳號或密碼錯誤")
 else:
-    # --- 已登入介面 ---
+    # 已登入介面
     st.sidebar.title("南亞校務管理")
     st.sidebar.markdown(f"### 👤 {st.session_state['user_name']}")
     st.sidebar.write(f"**學號：** {st.session_state['user_id']}")
     st.sidebar.write(f"**系所：** {st.session_state['user_dept']}")
     st.sidebar.divider()
     
-    # --- 💡 側邊欄動態顯示當前點數與畢業進度 ---
+    # 側邊欄動態顯示當前點數與畢業進度
     valid_records = [r for r in st.session_state["history"] if "✅" in r["檢核狀態"]]
     total_points = sum(r["所得點數"] for r in valid_records)
     
     st.sidebar.subheader("🎯 畢業門檻點數累計")
     st.sidebar.metric(label="當前總點數", value=f"{total_points} / 12 點")
     
-    # 進度條顯示 (最高到 100%)
     progress_val = min(total_points / 12, 1.0)
     st.sidebar.progress(progress_val)
     
@@ -148,10 +140,11 @@ else:
                     while len(result_list) < 6:
                         result_list.append("資料缺失")
 
-                    ai_cert_name = result_list
-                    status_text = result_list
+                    # --- 💡 關鍵修正：精準指定清單中的各別欄位索引 ---
+                    ai_cert_name = result_list[2]   # 證照名稱
+                    status_text = result_list[4]    # 檢核狀態字串
+                    ai_reason = result_list[5]      # 審核原因
                     
-                    # 預設資料庫對齊欄位
                     matched_level = "依圖片判定"
                     matched_issuer = "依圖片判定"
                     cert_points = 0
@@ -176,14 +169,14 @@ else:
                         "檢核時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "學生姓名": st.session_state["user_name"],
                         "就讀系所": st.session_state["user_dept"],
-                        "證照顯示姓名": result_list,
+                        "證照顯示姓名": result_list[0],
                         "證照核定名稱": ai_cert_name,
                         "官方審定級數": matched_level,
                         "官方發證單位": matched_issuer,
                         "所得點數": cert_points,
-                        "證照編號": result_list,
+                        "證照編號": result_list[3],
                         "檢核狀態": final_status,
-                        "AI 審核原因": result_list
+                        "AI 審核原因": ai_reason
                     }
                     
                     st.session_state["history"].append(new_record)
@@ -198,13 +191,12 @@ else:
                     st.write(f"**📋 系統對齊資料：** 發證單位：`{matched_issuer}` | 核定級數：`{matched_level}` | 核發點數：`{cert_points}` 點")
                     st.write("---")
                     
-                    # 強制刷新頁面，讓側邊欄的點數計數器即時更新
                     st.rerun()
                     
                 except Exception as e:
                     st.error(f"自動化檢核失敗：{e}")
 
-    # --- 顯示歷史紀錄 ---
+    # 顯示歷史紀錄
     if st.session_state["history"]:
         st.divider()
         st.subheader("📋 證照檢核清單與累計報表")
